@@ -24,6 +24,7 @@ import xml.etree.ElementTree as ET
 from collections import namedtuple
 from enum import Enum
 from typing import List, Optional, Tuple
+from affine import Affine
 
 import geopandas as gpd
 import numpy as np
@@ -802,6 +803,7 @@ class Sentinel2:
         extrapolate=False,
         order: int = 1,
         bounds: Optional[rio.coords.BoundingBox] = None,
+        transform: Optional[Affine] = None,
     ):
         """
         Upsample angular grid for each viewing direction
@@ -826,14 +828,17 @@ class Sentinel2:
             # Convert bounds to row_col
             angles_window: rio.windows.Window = rio.windows.from_bounds(
                 *bounds,
-                transform=self.transform,
-            )
-            row_off = int(angles_window.row_off)
-            col_off = int(angles_window.col_off)
-            height = int(angles_window.height)
-            width = int(angles_window.width)
-            zoomed_dx = zoomed_dx[row_off : row_off + height, col_off : col_off + width]
-            zoomed_dy = zoomed_dy[row_off : row_off + height, col_off : col_off + width]
+                transform=transform if transform else self.transform,
+            ).round()
+            row_off, col_off = angles_window.row_off, angles_window.col_off
+            width, height = angles_window.width, angles_window.height
+
+            zoomed_dx = zoomed_dx[
+                slice(row_off, row_off + height), slice(col_off, col_off + width)
+            ]
+            zoomed_dy = zoomed_dy[
+                slice(row_off, row_off + height), slice(col_off, col_off + width)
+            ]
 
         # General case
         zoomed_azimuth = np.arctan(zoomed_dx / zoomed_dy)
@@ -858,7 +863,6 @@ class Sentinel2:
 
         return zoomed_zenith, zoomed_azimuth
 
-    # TODO add test to checks behavior with and without bounds
     def read_solar_angles_as_numpy(
         self,
         res: Res = Res.R1,
@@ -872,6 +876,17 @@ class Sentinel2:
         # Ensure that xml is parsed
         if self.sun_angles is None:
             self.parse_xml()
+        if res == self.Res.R1:
+            transform = self.transform
+        else:
+            transform = Affine(
+                self.transform[0] * 2,
+                self.transform[1],
+                self.transform[2],
+                self.transform[3],
+                self.transform[4] * 2,
+                self.transform[5],
+            )
 
         # Call up-sampling routine
         assert self.sun_angles is not None
@@ -882,6 +897,7 @@ class Sentinel2:
             res,
             order=interpolation_order,
             bounds=bounds,
+            transform=transform,
         )
 
     # TODO add test to checks behavior with and without bounds
@@ -907,19 +923,29 @@ class Sentinel2:
 
         # Derive output shape
         angles_window: rio.windows.Window | None = None
+        transform: Affine | None = None
         if bounds:
+            if res != self.Res.R1:
+                transform = Affine(
+                    self.transform[0] * 2,
+                    self.transform[1],
+                    self.transform[2],
+                    self.transform[3],
+                    self.transform[4] * 2,
+                    self.transform[5],
+                )
+            else:
+                transform = self.transform
+
             angles_window: rio.windows.Window = rio.windows.from_bounds(
-                *bounds,
-                transform=self.transform,
-            )
-            height, width = int(angles_window.height), int(angles_window.width)
+                *bounds, transform=transform
+            ).round()
+            height, width = angles_window.height, angles_window.width
+        elif res != self.Res.R1:
+            height, width = (5490, 5490)
         else:
             height, width = (10980, 10980)
         out_shape = (height, width)
-
-        # TODO Add out_shape for res != self.Res.R1
-        if res != self.Res.R1:
-            out_shape = (5490, 5490)
 
         # Init outputs
         odd_zenith_angles = np.full(out_shape, np.nan)
@@ -946,6 +972,7 @@ class Sentinel2:
                     order=interpolation_order,
                     extrapolate=True,
                     bounds=bounds,
+                    transform=transform,
                 )
 
                 # Apply masking
