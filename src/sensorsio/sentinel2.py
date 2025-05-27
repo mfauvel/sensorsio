@@ -795,7 +795,13 @@ class Sentinel2:
         return out_grid
 
     def upsample_by_viewing_directions(
-        self, zenith, azimuth, res: Res = Res.R1, extrapolate=False, order: int = 1
+        self,
+        zenith,
+        azimuth,
+        res: Res = Res.R1,
+        extrapolate=False,
+        order: int = 1,
+        bounds: Optional[rio.coords.BoundingBox] = None,
     ):
         """
         Upsample angular grid for each viewing direction
@@ -815,6 +821,19 @@ class Sentinel2:
 
         zoomed_dx = self.upsample_angular_grid(delta_x, res=res, order=order)
         zoomed_dy = self.upsample_angular_grid(delta_y, res=res, order=order)
+
+        if bounds:
+            # Convert bounds to row_col
+            angles_window: rio.windows.Window = rio.windows.from_bounds(
+                *bounds,
+                transform=self.transform,
+            )
+            row_off = int(angles_window.row_off)
+            col_off = int(angles_window.col_off)
+            height = int(angles_window.height)
+            width = int(angles_window.width)
+            zoomed_dx = zoomed_dx[row_off : row_off + height, col_off : col_off + width]
+            zoomed_dy = zoomed_dy[row_off : row_off + height, col_off : col_off + width]
 
         # General case
         zoomed_azimuth = np.arctan(zoomed_dx / zoomed_dy)
@@ -839,8 +858,12 @@ class Sentinel2:
 
         return zoomed_zenith, zoomed_azimuth
 
+    # TODO add test to checks behavior with and without bounds
     def read_solar_angles_as_numpy(
-        self, res: Res = Res.R1, interpolation_order: int = 1
+        self,
+        res: Res = Res.R1,
+        interpolation_order: int = 1,
+        bounds: Optional[rio.coords.BoundingBox] = None,
     ):
         """
         Return zenith and azimuth solar angle as a tuple fo 2 numpy
@@ -852,15 +875,22 @@ class Sentinel2:
 
         # Call up-sampling routine
         assert self.sun_angles is not None
+
         return self.upsample_by_viewing_directions(
             self.sun_angles.zenith,
             self.sun_angles.azimuth,
             res,
             order=interpolation_order,
+            bounds=bounds,
         )
 
+    # TODO add test to checks behavior with and without bounds
     def read_incidence_angles_as_numpy(
-        self, band: Band = Band.B2, res: Res = Res.R1, interpolation_order: int = 1
+        self,
+        band: Band = Band.B2,
+        res: Res = Res.R1,
+        interpolation_order: int = 1,
+        bounds: Optional[rio.coords.BoundingBox] = None,
     ):
         """
         Main method for reading incidence angles as numpy arrays
@@ -876,8 +906,18 @@ class Sentinel2:
         detector_masks = self.build_detectors_masks_path()
 
         # Derive output shape
-        out_shape = (10980, 10980)
+        angles_window: rio.windows.Window | None = None
+        if bounds:
+            angles_window: rio.windows.Window = rio.windows.from_bounds(
+                *bounds,
+                transform=self.transform,
+            )
+            height, width = int(angles_window.height), int(angles_window.width)
+        else:
+            height, width = (10980, 10980)
+        out_shape = (height, width)
 
+        # TODO Add out_shape for res != self.Res.R1
         if res != self.Res.R1:
             out_shape = (5490, 5490)
 
@@ -897,7 +937,7 @@ class Sentinel2:
 
                 # Read the mask
                 with rio.open(current_detector_mask_path) as dataset:
-                    current_detector_mask = dataset.read(1)
+                    current_detector_mask = dataset.read(1, window=angles_window)
 
                 zoomed_zenith, zoomed_azimuth = self.upsample_by_viewing_directions(
                     angles.zenith,
@@ -905,6 +945,7 @@ class Sentinel2:
                     res=res,
                     order=interpolation_order,
                     extrapolate=True,
+                    bounds=bounds,
                 )
 
                 # Apply masking
