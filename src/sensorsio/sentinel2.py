@@ -24,7 +24,7 @@ import xml.etree.ElementTree as ET
 from collections import namedtuple
 from enum import Enum
 from typing import List, Optional, Tuple
-from affine import Affine
+from affine import Affine  # type: ignore
 
 import geopandas as gpd
 import numpy as np
@@ -825,20 +825,20 @@ class Sentinel2:
         zoomed_dy = self.upsample_angular_grid(delta_y, res=res, order=order)
 
         if bounds:
-            # Convert bounds to row_col
+            # Convert bounds to window
             angles_window: rio.windows.Window = rio.windows.from_bounds(
                 *bounds,
                 transform=transform if transform else self.transform,
             ).round()
-            row_off, col_off = angles_window.row_off, angles_window.col_off
-            width, height = angles_window.width, angles_window.height
 
-            zoomed_dx = zoomed_dx[
-                slice(row_off, row_off + height), slice(col_off, col_off + width)
-            ]
-            zoomed_dy = zoomed_dy[
-                slice(row_off, row_off + height), slice(col_off, col_off + width)
-            ]
+            slice_row = slice(
+                angles_window.row_off, angles_window.row_off + angles_window.height
+            )
+            slice_col = slice(
+                angles_window.col_off, angles_window.col_off + angles_window.width
+            )
+            zoomed_dx = zoomed_dx[slice_row, slice_col]
+            zoomed_dy = zoomed_dy[slice_row, slice_col]
 
         # General case
         zoomed_azimuth = np.arctan(zoomed_dx / zoomed_dy)
@@ -937,7 +937,7 @@ class Sentinel2:
             else:
                 transform = self.transform
 
-            angles_window: rio.windows.Window = rio.windows.from_bounds(
+            angles_window = rio.windows.from_bounds(
                 *bounds, transform=transform
             ).round()
             height, width = angles_window.height, angles_window.width
