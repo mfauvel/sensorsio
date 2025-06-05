@@ -23,7 +23,7 @@ import warnings
 import xml.etree.ElementTree as ET
 from collections import namedtuple
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 from affine import Affine  # type: ignore
 
 import geopandas as gpd
@@ -900,7 +900,6 @@ class Sentinel2:
             transform=transform,
         )
 
-    # TODO add test to checks behavior with and without bounds
     def read_incidence_angles_as_numpy(
         self,
         band: Band = Band.B2,
@@ -922,8 +921,8 @@ class Sentinel2:
         detector_masks = self.build_detectors_masks_path()
 
         # Derive output shape
-        angles_window: rio.windows.Window | None = None
-        transform: Affine | None = None
+        angles_window: Union[rio.windows.Window, None] = None
+        transform: Union[Affine, None] = None
         if bounds:
             if res != self.Res.R1:
                 transform = Affine(
