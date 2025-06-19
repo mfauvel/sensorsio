@@ -23,7 +23,8 @@ import warnings
 import xml.etree.ElementTree as ET
 from collections import namedtuple
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
+from affine import Affine  # type: ignore
 
 import geopandas as gpd
 import numpy as np
@@ -795,7 +796,14 @@ class Sentinel2:
         return out_grid
 
     def upsample_by_viewing_directions(
-        self, zenith, azimuth, res: Res = Res.R1, extrapolate=False, order: int = 1
+        self,
+        zenith,
+        azimuth,
+        res: Res = Res.R1,
+        extrapolate=False,
+        order: int = 1,
+        bounds: Optional[rio.coords.BoundingBox] = None,
+        transform: Optional[Affine] = None,
     ):
         """
         Upsample angular grid for each viewing direction
@@ -815,6 +823,22 @@ class Sentinel2:
 
         zoomed_dx = self.upsample_angular_grid(delta_x, res=res, order=order)
         zoomed_dy = self.upsample_angular_grid(delta_y, res=res, order=order)
+
+        if bounds:
+            # Convert bounds to window
+            angles_window: rio.windows.Window = rio.windows.from_bounds(
+                *bounds,
+                transform=transform if transform else self.transform,
+            ).round()
+
+            slice_row = slice(
+                angles_window.row_off, angles_window.row_off + angles_window.height
+            )
+            slice_col = slice(
+                angles_window.col_off, angles_window.col_off + angles_window.width
+            )
+            zoomed_dx = zoomed_dx[slice_row, slice_col]
+            zoomed_dy = zoomed_dy[slice_row, slice_col]
 
         # General case
         zoomed_azimuth = np.arctan(zoomed_dx / zoomed_dy)
@@ -840,7 +864,10 @@ class Sentinel2:
         return zoomed_zenith, zoomed_azimuth
 
     def read_solar_angles_as_numpy(
-        self, res: Res = Res.R1, interpolation_order: int = 1
+        self,
+        res: Res = Res.R1,
+        interpolation_order: int = 1,
+        bounds: Optional[rio.coords.BoundingBox] = None,
     ):
         """
         Return zenith and azimuth solar angle as a tuple fo 2 numpy
@@ -849,18 +876,36 @@ class Sentinel2:
         # Ensure that xml is parsed
         if self.sun_angles is None:
             self.parse_xml()
+        if res == self.Res.R1:
+            transform = self.transform
+        else:
+            transform = Affine(
+                self.transform[0] * 2,
+                self.transform[1],
+                self.transform[2],
+                self.transform[3],
+                self.transform[4] * 2,
+                self.transform[5],
+            )
 
         # Call up-sampling routine
         assert self.sun_angles is not None
+
         return self.upsample_by_viewing_directions(
             self.sun_angles.zenith,
             self.sun_angles.azimuth,
             res,
             order=interpolation_order,
+            bounds=bounds,
+            transform=transform,
         )
 
     def read_incidence_angles_as_numpy(
-        self, band: Band = Band.B2, res: Res = Res.R1, interpolation_order: int = 1
+        self,
+        band: Band = Band.B2,
+        res: Res = Res.R1,
+        interpolation_order: int = 1,
+        bounds: Optional[rio.coords.BoundingBox] = None,
     ):
         """
         Main method for reading incidence angles as numpy arrays
@@ -876,10 +921,30 @@ class Sentinel2:
         detector_masks = self.build_detectors_masks_path()
 
         # Derive output shape
-        out_shape = (10980, 10980)
+        angles_window: Union[rio.windows.Window, None] = None
+        transform: Union[Affine, None] = None
+        if bounds:
+            if res != self.Res.R1:
+                transform = Affine(
+                    self.transform[0] * 2,
+                    self.transform[1],
+                    self.transform[2],
+                    self.transform[3],
+                    self.transform[4] * 2,
+                    self.transform[5],
+                )
+            else:
+                transform = self.transform
 
-        if res != self.Res.R1:
-            out_shape = (5490, 5490)
+            angles_window = rio.windows.from_bounds(
+                *bounds, transform=transform
+            ).round()
+            height, width = angles_window.height, angles_window.width
+        elif res != self.Res.R1:
+            height, width = (5490, 5490)
+        else:
+            height, width = (10980, 10980)
+        out_shape = (height, width)
 
         # Init outputs
         odd_zenith_angles = np.full(out_shape, np.nan)
@@ -897,7 +962,7 @@ class Sentinel2:
 
                 # Read the mask
                 with rio.open(current_detector_mask_path) as dataset:
-                    current_detector_mask = dataset.read(1)
+                    current_detector_mask = dataset.read(1, window=angles_window)
 
                 zoomed_zenith, zoomed_azimuth = self.upsample_by_viewing_directions(
                     angles.zenith,
@@ -905,6 +970,8 @@ class Sentinel2:
                     res=res,
                     order=interpolation_order,
                     extrapolate=True,
+                    bounds=bounds,
+                    transform=transform,
                 )
 
                 # Apply masking
