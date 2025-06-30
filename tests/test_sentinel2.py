@@ -394,4 +394,4 @@ def test_read_incidence_angles_with_zip_file():
     angles_zip = s2_dataset_zip.read_incidence_angles_as_numpy()
 
     for angle, angle_zip in zip(angles, angles_zip):
-        np.allclose(angle, angle_zip)
+        assert np.allclose(angle, angle_zip)
